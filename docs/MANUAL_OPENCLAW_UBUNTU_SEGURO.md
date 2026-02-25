@@ -1,91 +1,83 @@
-# Manual completo: Ubuntu + OpenClaw seguro y accesible desde internet (costo casi cero)
+# Manual personalizado: OpenClaw local en laptop Ubuntu (multiusuario, seguro, costo casi cero)
 
-## 0) Objetivo
+## 0) Perfil y objetivo de este manual
 
-Tener una laptop con Ubuntu nuevo dedicada a OpenClaw, con acceso remoto desde cualquier lugar, pero solo para ti y con el menor costo posible.
+Este documento esta adaptado a tu escenario real:
 
-Este manual prioriza:
-
-- Seguridad real (sin puertos publicos abiertos en el router).
-- Acceso privado con credenciales y MFA.
-- Operacion simple y mantenible.
-- Costo mensual ~0 (excepto tu futuro plan de modelo/LLM).
-
----
-
-## 1) Arquitectura recomendada (la mas segura y barata)
-
-**Recomendacion principal:** no publicar puertos al internet publico.
-
-Usa esta arquitectura:
-
-1. Laptop Ubuntu dedicada a OpenClaw.
-2. OpenClaw corriendo como servicio local.
-3. Acceso remoto por **Tailscale** (red privada WireGuard, plan personal gratuito).
-4. SSH y dashboard solo por la red privada de Tailscale.
-5. Router sin port-forwarding, sin DMZ, sin UPnP.
-
-Con esto, la laptop esta "accesible desde internet", pero no expuesta de forma abierta.
+- Laptop Lenovo Ideapad (Core i3, 12 GB RAM, SSD 480 GB, HDD 1 TB).
+- Instalacion limpia desde cero.
+- OpenClaw correra localmente en esa laptop.
+- Uso por varias personas via canales de mensajeria (WhatsApp/Telegram).
+- Laptop encendida 24/7, con recuperacion automatica tras reinicio.
+- Acceso remoto de administracion desde laptop/cel/tablet.
+- Presupuesto de infraestructura mensual: idealmente $0.
+- Cerebro/modelo: API externa (equilibrio costo/calidad).
 
 ---
 
-## 2) Preparacion inicial de Ubuntu (dia 0)
+## 1) Decisiones tecnicas recomendadas para tu caso
 
-## 2.1 Durante instalacion de Ubuntu
+1. **Ubuntu recomendado:** 24.04 LTS.
+2. **Sin puertos abiertos en router:** no usar port forwarding, DMZ ni UPnP.
+3. **Administracion remota segura:** Tailscale gratis + MFA + SSH con llave.
+4. **Operacion multiusuario:** por canales OpenClaw (Telegram/WhatsApp), no por cuentas SSH.
+5. **Arranque automatico:** daemon de OpenClaw en systemd + `linger` activo.
+6. **Backups semanales:** automaticos al HDD de 1 TB.
 
-- Usa Ubuntu LTS reciente (ideal: 24.04 LTS).
-- Activa cifrado de disco completo (LUKS) en el instalador.
-- Crea un usuario administrador unico (ejemplo: `openclawadmin`).
-- Usa password largo (minimo 16 caracteres, mejor frase de paso).
+---
 
-## 2.2 Actualiza e instala base del sistema
+## 2) Instalacion limpia de Ubuntu (dia 0)
+
+## 2.1 Durante el instalador
+
+- Elige **Ubuntu 24.04 LTS**.
+- Activa cifrado de disco completo (LUKS) para el SSD.
+- Crea usuario admin unico, por ejemplo `openclawadmin`.
+- Usa password fuerte (ideal 16+ caracteres).
+
+## 2.2 Primer arranque: paquetes base
 
 ```bash
 sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y curl git ca-certificates jq ufw fail2ban unattended-upgrades openssh-server gnupg
+sudo apt install -y curl git ca-certificates jq ufw fail2ban unattended-upgrades openssh-server gnupg rsync
 sudo systemctl enable --now ssh
+sudo systemctl enable --now fail2ban
 sudo systemctl enable --now unattended-upgrades
-```
-
-Opcional pero recomendado:
-
-```bash
 sudo apt autoremove -y
 ```
 
 ---
 
-## 3) Endurecimiento base de acceso SSH
+## 3) Seguridad base del sistema
 
-> Importante: primero configura tu llave SSH y valida acceso antes de desactivar password por SSH.
+## 3.1 SSH por llave (sin password)
 
-## 3.1 Genera llave SSH en tu equipo cliente (tu laptop personal principal)
+En tu equipo cliente (desde donde administras):
 
 ```bash
 ssh-keygen -t ed25519 -a 100 -f ~/.ssh/openclaw_laptop -C "openclaw-laptop"
 ```
 
-## 3.2 Copia llave publica al servidor Ubuntu (en red local al inicio)
+Copia llave al servidor (en red local al inicio):
 
 ```bash
 ssh-copy-id -i ~/.ssh/openclaw_laptop.pub openclawadmin@IP_LOCAL_UBUNTU
 ```
 
-## 3.3 Verifica login por llave
+Prueba acceso:
 
 ```bash
 ssh -i ~/.ssh/openclaw_laptop openclawadmin@IP_LOCAL_UBUNTU
 ```
 
-## 3.4 Endurece SSH (`/etc/ssh/sshd_config`)
-
-Edita:
+## 3.2 Endurecer SSH
 
 ```bash
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%F)
 sudo nano /etc/ssh/sshd_config
 ```
 
-Asegura estas lineas (ajusta usuario):
+Deja estas directivas:
 
 ```text
 PermitRootLogin no
@@ -96,20 +88,16 @@ X11Forwarding no
 AllowUsers openclawadmin
 ```
 
-Valida y reinicia SSH:
+Valida y aplica:
 
 ```bash
 sudo sshd -t
 sudo systemctl restart ssh
 ```
 
----
+## 3.3 Firewall UFW
 
-## 4) Firewall correcto (UFW)
-
-1) Bloquear todo ingreso por defecto.
-2) Permitir SSH temporal para no bloquearte.
-3) Luego restringir SSH solo a interfaz Tailscale.
+Primero habilita reglas base:
 
 ```bash
 sudo ufw default deny incoming
@@ -119,7 +107,7 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-Despues de configurar Tailscale (seccion 5), restringe SSH:
+Luego, cuando Tailscale ya este operativo (seccion 4), restringe SSH a esa interfaz:
 
 ```bash
 sudo ufw delete allow OpenSSH
@@ -129,284 +117,293 @@ sudo ufw status numbered
 
 ---
 
-## 5) Acceso remoto privado con Tailscale (plan gratuito)
+## 4) Acceso remoto seguro y gratis (Tailscale)
 
-## 5.1 Instalar Tailscale en la laptop servidor
+### Que es Tailscale en una linea
+Es una red privada cifrada (WireGuard) que te deja entrar a tu laptop desde cualquier lugar sin exponer puertos publicos.
+
+## 4.1 Instalar y activar
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up --ssh
 tailscale status
+tailscale ip -4
 ```
 
-## 5.2 Instalar Tailscale en tus dispositivos cliente
+## 4.2 Seguridad de cuenta (MFA)
 
-Instala Tailscale en tu otra laptop, desktop o celular y entra con tu cuenta.
+- Inicia sesion en Tailscale con tu cuenta principal (Google/GitHub/Microsoft).
+- Asegura que esa cuenta ya tenga 2FA/MFA activa (tu caso: si).
+- Elimina de Tailscale cualquier dispositivo que ya no uses.
 
-## 5.3 Asegurar cuenta y politica de acceso
+## 4.3 Acceso remoto desde cualquier dispositivo
 
-- Activa MFA en tu proveedor de identidad (Google/GitHub/Microsoft, etc).
-- Mantiene solo tus dispositivos autorizados en el tailnet.
-- En ACL de Tailscale, deja acceso solo a tu usuario.
-
-Ejemplo de ACL minima (conceptual):
-
-```json
-{
-  "acls": [
-    {
-      "action": "accept",
-      "src": ["tu_correo@dominio.com"],
-      "dst": ["openclaw-laptop:22,3000"]
-    }
-  ]
-}
-```
-
-> Si no usaras dashboard remoto, deja solo `:22`.
-
----
-
-## 6) Instalacion oficial de OpenClaw en Ubuntu
-
-Segun instalador oficial de OpenClaw, se requiere Node.js 22+.
-
-## 6.1 Opcion recomendada (script oficial)
-
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-```
-
-Si quieres instalar sin asistente interactivo inicial:
-
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
-```
-
-## 6.2 Opcion manual (si prefieres control total)
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -g openclaw@latest
-openclaw onboard --install-daemon
-```
-
-## 6.3 Validacion basica
-
-```bash
-node -v
-npm -v
-openclaw doctor
-openclaw status
-```
-
-Si no encuentra `openclaw`, revisa PATH:
-
-```bash
-npm prefix -g
-echo "$PATH"
-```
-
-Si hace falta:
-
-```bash
-echo 'export PATH="$(npm prefix -g)/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
----
-
-## 7) Manejo seguro de credenciales de OpenClaw
-
-No guardes API keys en el historial shell ni en repositorios.
-
-## 7.1 Archivo de entorno protegido
-
-```bash
-sudo install -d -m 700 /etc/openclaw
-sudo nano /etc/openclaw/openclaw.env
-sudo chmod 600 /etc/openclaw/openclaw.env
-```
-
-Contenido ejemplo:
-
-```bash
-OPENCLAW_API_KEY=PEGA_AQUI_TU_API_KEY
-```
-
-## 7.2 Inyectar variables al servicio systemd
-
-Primero identifica el servicio (puede ser de sistema o de usuario):
-
-```bash
-systemctl list-unit-files --type=service | rg -i openclaw
-systemctl --user list-unit-files --type=service | rg -i openclaw
-```
-
-Luego define el nombre real de unidad, por ejemplo:
-
-- `openclaw.service`
-- `openclaw-gateway.service`
-
-Luego crea override (ajusta nombre real):
-
-```bash
-sudo systemctl edit NOMBRE_SERVICIO_OPENCLAW
-```
-
-Agrega:
-
-```ini
-[Service]
-EnvironmentFile=/etc/openclaw/openclaw.env
-```
-
-Aplica cambios (sistema):
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart NOMBRE_SERVICIO_OPENCLAW
-sudo systemctl status NOMBRE_SERVICIO_OPENCLAW
-```
-
-Si tu unidad es de usuario, usa:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user restart NOMBRE_SERVICIO_OPENCLAW
-systemctl --user status NOMBRE_SERVICIO_OPENCLAW
-```
-
----
-
-## 8) Uso remoto desde cualquier lugar (solo tu)
-
-## 8.1 Conectarte por SSH (red privada Tailscale)
+Instala Tailscale en tu laptop, celular y tablet.  
+Para administrar la laptop OpenClaw:
 
 ```bash
 ssh -i ~/.ssh/openclaw_laptop openclawadmin@NOMBRE_O_IP_TAILSCALE
 ```
 
-## 8.2 Usar dashboard sin exponer puertos publicos
+---
 
-Haz tunel SSH desde tu equipo cliente:
+## 5) Instalar OpenClaw localmente en Ubuntu
+
+Requisito oficial actual: Node.js 22+ (el instalador oficial lo maneja).
+
+## 5.1 Instalacion recomendada (oficial)
 
 ```bash
-ssh -i ~/.ssh/openclaw_laptop -L 3333:127.0.0.1:3000 openclawadmin@NOMBRE_O_IP_TAILSCALE
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-Luego abre en tu navegador local:
-
-```text
-http://127.0.0.1:3333
-```
-
-Si tu dashboard usa otro puerto, reemplaza `3000`.
-
----
-
-## 9) Hardening extra recomendado (alto valor, costo 0)
-
-## 9.1 Fail2ban
+Si quieres relanzar configuracion:
 
 ```bash
-sudo systemctl enable --now fail2ban
-sudo fail2ban-client status
+openclaw onboard
 ```
 
-## 9.2 Actualizaciones automaticas
+## 5.2 Decisiones dentro del wizard (recomendadas para tu caso)
+
+Cuando ejecutes onboarding, usa:
+
+- Modo: **Local**
+- Proveedor modelo: **API externa** (tu plan elegido)
+- Workspace: default (`~/.openclaw/workspace`) o ruta dedicada
+- Gateway bind: **127.0.0.1** (no publico)
+- Tailscale exposure: **Off** (administracion remota ya va por SSH/Tailscale)
+- Canales: Telegram y/o WhatsApp
+- Daemon: **instalar y habilitar**
+
+## 5.3 Verificacion
 
 ```bash
-sudo dpkg-reconfigure --priority=low unattended-upgrades
+openclaw doctor
+openclaw status
+openclaw channels list
 ```
-
-## 9.3 Reducir superficie de ataque
-
-- Desactiva UPnP en el router.
-- No abras puertos 22/80/443 al internet publico.
-- Si no usas Bluetooth en esa laptop, desactivalo.
-- Mantiene solo software necesario para OpenClaw.
 
 ---
 
-## 10) Backup y recuperacion
+## 6) Arranque automatico y recuperacion tras reinicio
 
-Minimo recomendado:
+Tu requisito: que al encender la laptop todo vuelva automaticamente.
 
-- Backup semanal cifrado de:
-  - `~/.openclaw`
-  - `/etc/openclaw`
-  - `/etc/ssh`
-- Destino: disco USB externo cifrado (costo unico, sin mensualidad).
-
-Comando rapido de backup (tar cifrado con gpg simetrico):
+## 6.1 Identificar unidad systemd de OpenClaw
 
 ```bash
-sudo tar -czf - /home/openclawadmin/.openclaw /etc/openclaw /etc/ssh | gpg -c -o /ruta_usb/backup_openclaw_$(date +%F).tar.gz.gpg
+systemctl --user list-unit-files --type=service | rg -i openclaw
 ```
 
----
+Toma el nombre que aparezca (ejemplo: `openclaw.service`) y reemplaza `NOMBRE_UNIDAD`.
 
-## 11) Checklist final de seguridad (debe quedar en verde)
+## 6.2 Habilitar autoarranque
 
-- [ ] Ubuntu LTS actualizado.
-- [ ] Disco cifrado.
-- [ ] `PermitRootLogin no`.
-- [ ] `PasswordAuthentication no`.
-- [ ] UFW activo con politica deny incoming.
-- [ ] SSH permitido solo en `tailscale0`.
-- [ ] Tailscale activo con MFA.
-- [ ] Sin port-forwarding en router.
-- [ ] OpenClaw funcionando (`openclaw doctor` OK).
-- [ ] API keys fuera de historial y con permisos `600`.
-- [ ] Backup semanal probado.
+```bash
+systemctl --user enable --now NOMBRE_UNIDAD
+sudo loginctl enable-linger "$USER"
+systemctl --user status NOMBRE_UNIDAD
+```
 
----
+`enable-linger` evita que el servicio dependa de una sesion grafica activa.
 
-## 12) Costos estimados
+## 6.3 Prueba real
 
-- Ubuntu: **$0**
-- OpenClaw (software): **$0**
-- Tailscale plan personal: **$0**
-- Seguridad base (UFW/fail2ban/unattended-upgrades): **$0**
-- Costo variable real: **tu plan de modelo/LLM** (cuando lo actives)
+```bash
+sudo reboot
+```
 
----
-
-## 13) Runbook rapido de operacion diaria
-
-En la laptop servidor:
+Despues de reiniciar:
 
 ```bash
 openclaw status
-sudo systemctl status NOMBRE_SERVICIO_OPENCLAW
+systemctl --user status NOMBRE_UNIDAD
+```
+
+---
+
+## 7) Multiusuario por mensajeria (sin abrir puertos del router)
+
+## 7.1 Telegram (recomendado para iniciar rapido)
+
+1. Crea bot con **@BotFather** y guarda el token.
+2. Configura canal Telegram en OpenClaw (wizard o config).
+3. Politica recomendada al inicio:
+   - `dmPolicy: "pairing"`
+   - `groupPolicy: "allowlist"`
+4. Arranca gateway (si no esta en daemon):
+
+```bash
+openclaw gateway
+```
+
+5. Aprobar solicitudes de usuarios:
+
+```bash
+openclaw pairing list telegram
+openclaw pairing approve telegram CODIGO
+```
+
+Nota: no uses webhook publico al inicio; evita exponer endpoints.
+
+## 7.2 WhatsApp (soportado por WhatsApp Web / Baileys)
+
+1. Login del canal por QR:
+
+```bash
+openclaw channels login --channel whatsapp
+```
+
+2. Politica recomendada al inicio:
+   - `dmPolicy: "pairing"`
+   - `groupPolicy: "allowlist"`
+3. Aprobar usuarios:
+
+```bash
+openclaw pairing list whatsapp
+openclaw pairing approve whatsapp CODIGO
+```
+
+4. Para produccion estable, es mejor usar numero dedicado para OpenClaw.
+
+## 7.3 Politica recomendada para tus primeros 30 dias
+
+- Semana 1-2: `pairing` (control de entrada por aprobacion manual).
+- Semana 3+: migrar a `allowlist` con usuarios/numeros autorizados.
+- No compartir credenciales SSH con participantes; solo usar canales.
+
+---
+
+## 8) Operacion 24/7 y mantenimiento
+
+## 8.1 Comandos de salud
+
+```bash
+openclaw status
+openclaw channels status
 tailscale status
 sudo ufw status verbose
 ```
 
-Logs de OpenClaw:
+Logs:
 
 ```bash
-sudo journalctl -u NOMBRE_SERVICIO_OPENCLAW -n 100 --no-pager
+systemctl --user status NOMBRE_UNIDAD
+journalctl --user -u NOMBRE_UNIDAD -n 200 --no-pager
 ```
 
-Actualizacion mensual recomendada:
+## 8.2 Actualizacion mensual recomendada
 
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 npm install -g openclaw@latest
-sudo systemctl restart NOMBRE_SERVICIO_OPENCLAW
+systemctl --user restart NOMBRE_UNIDAD
 ```
 
 ---
 
-## 14) Nota final importante
+## 9) Backups automaticos semanales al HDD (1 TB)
 
-Si quieres el mejor balance seguridad/costo:
+Objetivo: recuperar rapido si hay corrupcion o error humano.
 
-- **No abras puertos del router**.
-- Usa **Tailscale + MFA + SSH con llave**.
-- Mantiene OpenClaw y Ubuntu siempre al dia.
+## 9.1 Script de backup
 
-Con eso tienes una laptop OpenClaw usable desde cualquier lugar, pero con acceso restringido a tus credenciales.
+```bash
+sudo tee /usr/local/sbin/openclaw-backup.sh > /dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+OPENCLAW_USER="openclawadmin"
+SRC_HOME="/home/${OPENCLAW_USER}/.openclaw"
+TARGET_BASE="/mnt/lab-hdd/backups/openclaw"
+STAMP="$(date +%F_%H-%M-%S)"
+DEST="${TARGET_BASE}/${STAMP}"
+
+mkdir -p "${DEST}"
+
+if [ -d "${SRC_HOME}" ]; then
+  tar -czf "${DEST}/home-openclaw.tgz" -C "/home/${OPENCLAW_USER}" ".openclaw"
+fi
+
+if [ -d "/etc/ssh" ]; then
+  tar -czf "${DEST}/etc-ssh.tgz" -C /etc ssh
+fi
+
+if [ -d "/etc/openclaw" ]; then
+  tar -czf "${DEST}/etc-openclaw.tgz" -C /etc openclaw
+fi
+
+find "${TARGET_BASE}" -mindepth 1 -maxdepth 1 -type d -mtime +45 -exec rm -rf {} +
+EOF
+
+sudo chmod 700 /usr/local/sbin/openclaw-backup.sh
+```
+
+Si tu HDD esta montado en otra ruta, cambia `TARGET_BASE`.
+
+## 9.2 Timer semanal con systemd
+
+```bash
+sudo tee /etc/systemd/system/openclaw-backup.service > /dev/null <<'EOF'
+[Unit]
+Description=Weekly OpenClaw backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openclaw-backup.sh
+EOF
+```
+
+```bash
+sudo tee /etc/systemd/system/openclaw-backup.timer > /dev/null <<'EOF'
+[Unit]
+Description=Run OpenClaw backup weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-backup.timer
+sudo systemctl list-timers | rg openclaw-backup
+```
+
+---
+
+## 10) Checklist final (debe quedar en verde)
+
+- [ ] Ubuntu 24.04 LTS instalado limpio y actualizado.
+- [ ] Disco principal cifrado.
+- [ ] OpenClaw instalado y funcional (`openclaw doctor` y `openclaw status`).
+- [ ] Daemon de OpenClaw habilitado y probado tras reboot.
+- [ ] Tailscale activo con MFA.
+- [ ] SSH solo por llave y solo por `tailscale0`.
+- [ ] Sin puertos abiertos en router (sin DMZ, sin UPnP).
+- [ ] Canales con `pairing` o `allowlist` (no `open` en produccion).
+- [ ] Backup semanal automatico activo en HDD.
+
+---
+
+## 11) Costos esperados
+
+- Ubuntu: **$0**
+- OpenClaw software: **$0**
+- Tailscale plan personal: **$0**
+- Infra de red extra: **$0**
+- Costo variable: **tu plan de API externa**
+
+---
+
+## 12) Preguntas finales para dejar este manual 100% cerrado
+
+1. Quieres arrancar primero con **Telegram**, **WhatsApp**, o ambos al mismo tiempo?
+2. Para WhatsApp, usaras numero dedicado para OpenClaw o tu numero personal?
+3. Quieres que te deje una plantilla exacta de `allowlist` inicial (nombres y telefonos)?
+4. Que proveedor/modelo API usaras primero para balance costo/calidad?
