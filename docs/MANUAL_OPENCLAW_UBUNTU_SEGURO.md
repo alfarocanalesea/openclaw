@@ -1,6 +1,7 @@
-# Manual definitivo: OpenClaw en laptop Ubuntu local, seguro, 24/7, paso a paso
+# Manual para la configuración de OpenClaw en laptop Ubuntu local, seguro, 24/7, paso a paso
 
 Este manual esta escrito para ejecutarse de inicio a fin sin suposiciones.
+
 Incluye:
 
 - instalacion limpia de Ubuntu en laptop local
@@ -14,14 +15,14 @@ Incluye:
 
 ---
 
-## 0) Perfil objetivo (tu caso)
+## 0) Perfil objetivo
 
-- Equipo: Lenovo Ideapad, Core i3, 12 GB RAM, SSD 480 GB, HDD 1 TB.
-- OpenClaw corre localmente en esa laptop.
-- Uso por varias personas via mensajeria (Telegram/WhatsApp).
-- Administracion remota por ti desde laptop/cel/tablet.
+- Equipo para el laboratorio: Lenovo Ideapad, Core i3, 12 GB RAM, SSD 480 GB, HDD 1 TB.
+- OpenClaw correra localmente en esa laptop.
+- Usar por varias personas via mensajeria (Telegram/WhatsApp).
+- Administracion remota por administrador desde laptop/cel/tablet.
 - Encendido 24/7.
-- Costo de infraestructura mensual: ~0.
+- Costo de infraestructura mensual: Idealmente lo más aproximado a 0.
 
 ---
 
@@ -34,7 +35,7 @@ Incluye:
 5. UFW bloqueando todo ingreso salvo SSH por `tailscale0`.
 6. Router sin puertos abiertos, sin DMZ, sin UPnP.
 
-Resultado: accesible desde internet para ti, sin exponer la laptop de forma publica.
+Resultado: accesible desde internet para el administrador, sin exponer la laptop de forma publica.
 
 ---
 
@@ -84,7 +85,7 @@ En el asistente:
    - No toques el HDD de 1 TB en este paso.
 5. Activa cifrado de disco (LUKS) para el SSD.
 6. Crea usuario **NO ROOT**:
-   - Nombre de usuario: `openclawadmin` (o el que elijas)
+   - Nombre de usuario: `tx-ow` (o el que elijas)
    - Password fuerte 16+ caracteres
 7. Completa instalacion y reinicia.
 
@@ -99,7 +100,7 @@ groups
 ```
 
 Esperado:
-- `whoami` muestra tu usuario (ej. `openclawadmin`)
+- `whoami` muestra tu usuario (ej. `tx-ow`)
 - `id -u` debe ser distinto de `0`
 - debes pertenecer al grupo `sudo`
 
@@ -117,9 +118,9 @@ newgrp sudo
 Si por algun motivo no tienes usuario no-root admin, crea uno:
 
 ```bash
-sudo adduser "$LAB_USER"
-sudo usermod -aG sudo "$LAB_USER"
-id "$LAB_USER"
+sudo adduser "$openclawadmin"
+sudo usermod -aG sudo "$openclawadmin"
+id "$openclawadmin"
 ```
 
 Verifica que el UID no sea 0 y que tenga grupo sudo.
@@ -127,7 +128,7 @@ Verifica que el UID no sea 0 y que tenga grupo sudo.
 Cambiate al nuevo usuario:
 
 ```bash
-su - "$LAB_USER"
+su - "$openclawadmin"
 ```
 
 ---
@@ -171,7 +172,7 @@ timedatectl status | rg "NTP service|System clock synchronized"
 ## 7) Configurar hostname fijo del laboratorio
 
 ```bash
-sudo hostnamectl set-hostname "$LAB_HOSTNAME"
+sudo hostnamectl set-hostname "$openclawadmin"
 hostnamectl
 ```
 
